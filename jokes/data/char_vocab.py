@@ -45,10 +45,10 @@ class Transform(object):
                 self.char2id[line] = i
 
     def apply(self, text):
-        return [self.char2id.get(ch, UNKNOWN) for ch in text]
+        return [self.char2id.get(ch, self.UNKNOWN_id()) for ch in text]
 
     def get(self, char):
-        return self.char2id.get(char, UNKNOWN)
+        return self.char2id.get(char, self.UNKNOWN_id())
 
     def GO_id(self):
         return self.char2id[GO]
