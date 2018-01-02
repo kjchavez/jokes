@@ -9,3 +9,4 @@ __pycache__/
 checkpoint
 graph.pbtxt
 events.out.tfevents*
+vocab.txt
