@@ -1,11 +1,16 @@
 import collections
 
 PAD = '<pad>'
+PAD_ID = 0
+UNKNOWN = '<unk>'
+UNKNOWN_ID = 1
 GO = '<go>'
+GO_ID = 2
 EOS = '<eos>'
+EOS_ID = 3
+
 NEWLINE = '<newline>'
 TAB = '<tab>'
-UNKNOWN = '<unk>'
 
 def get_char_counts(text_iter):
     chars = collections.Counter()

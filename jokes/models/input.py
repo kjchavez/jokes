@@ -37,12 +37,22 @@ def file_sequence_generator(filename, batch_size, num_steps, forever=False):
 def create_tf_dataset(filename, batch_size, num_steps, forever=False):
     return tf.data.Dataset.from_generator(file_sequence_generator(filename, batch_size, num_steps,
                                                                   forever=forever),
-                                          (tf.int64, tf.int64))
+                                          (tf.int64, tf.int64),
+                                          (tf.TensorShape([batch_size, num_steps]),
+                                           tf.TensorShape([batch_size, num_steps])))
+
+
+def oneshot_input_fn(dset):
+    iterator = dset.make_one_shot_iterator()
+    x, y = iterator.get_next()
+    return {'tokens': x}, y
 
 if __name__ == "__main__":
     ds = create_tf_dataset("data/processed/jokes.dat", batch_size=32, num_steps=50, forever=False)
     value = ds.make_one_shot_iterator().get_next()
+    init_op = tf.global_variables_initializer()
     with tf.Session() as sess:
+        sess.run(init_op)
         x = sess.run(value)
         print(x)
 
