@@ -3,6 +3,7 @@ import glob
 import click
 import logging
 import json
+import random
 from jokes.data import char_vocab
 
 def joke_iter(filepattern):
@@ -10,8 +11,13 @@ def joke_iter(filepattern):
     for fname in filenames:
         with open(fname) as fp:
             data = json.load(fp)
+            random.shuffle(data)
             for elem in data:
-                if 'body' in elem:
+                if 'body' not in elem:
+                    continue
+                if 'title' in elem:
+                    yield elem['title'] + '\n' + elem['body']
+                else:
                     yield elem['body']
 
 def project_dir():

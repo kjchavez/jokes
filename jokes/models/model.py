@@ -33,6 +33,7 @@ def model_fn(features, labels, mode, params):
     keep_prob = params['keep_prob']
     num_layers = params['num_layers']
     learning_rate = params['learning_rate']
+    l2_reg = params['l2_reg']
     dtype = tf.float32
     is_training = mode == tf.contrib.learn.ModeKeys.TRAIN
 
@@ -84,7 +85,8 @@ def model_fn(features, labels, mode, params):
                 inputs=inputs,
                 sequence_length=tf.tile([unroll_length], [batch_size]))
 
-    output_layer = tf.layers.Dense(vocab_size)
+    output_layer = tf.layers.Dense(vocab_size,
+                                   kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg))
     decoder = tf.contrib.seq2seq.BasicDecoder(
         cell=cell,
         helper=helper,

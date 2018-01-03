@@ -14,11 +14,12 @@ def default_hparams(vocab_file):
     transform = char_vocab.Transform(vocab_file)
     HP = tf.contrib.training.HParams(
         batch_size=32,
-        unroll_length=50,
+        unroll_length=100,
         embedding_dim=50,
         learning_rate=0.01,
         num_layers=2,
         keep_prob=0.9,
+        l2_reg=0.001,
         vocab_size=len(transform.chars),
         vocab=transform.chars
     )

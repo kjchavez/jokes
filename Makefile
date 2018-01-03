@@ -14,5 +14,11 @@ build_processed: jokes/data/make_dataset.py data/external/joke-dataset-master da
 models/baseline/model.ckpt-1000: jokes/models/main.py data/processed/jokes.dat $(vocab_filename)
 	python -m jokes.models.main train $(processed_dataset) $(vocab_filename) --steps=1000
 
+train: jokes/models/main.py data/processed/jokes.dat $(vocab_filename)
+	python -m jokes.models.main train $(processed_dataset) $(vocab_filename)
+
+clean_models:
+	rm -rf models/baseline
+
 generate: jokes/models/main.py models/baseline/model.ckpt-*
 	python -m jokes.models.main generate --model_dir=models/baseline
