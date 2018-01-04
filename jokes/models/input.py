@@ -1,6 +1,8 @@
 import tensorflow as tf
 import numpy as np
 
+from jokes.data import char_vocab
+
 
 class BatchedDataset(object):
     def __init__(self, raw_data, batch_size, num_steps, forever=False):
@@ -41,14 +43,29 @@ def create_tf_dataset(filename, batch_size, num_steps, forever=False):
                                           (tf.TensorShape([batch_size, num_steps]),
                                            tf.TensorShape([batch_size, num_steps])))
 
+def _parse_function(example_proto):
+  features = {"tokens": tf.VarLenFeature(tf.int64),
+              "length": tf.FixedLenFeature((), tf.int64, default_value=0)}
+  parsed_features = tf.parse_single_example(example_proto, features)
+  return tf.sparse_tensor_to_dense(parsed_features["tokens"]), parsed_features["length"]
+
+
+def create_joke_aligned_dataset(filename, batch_size):
+    return tf.data.TFRecordDataset([filename]).map(_parse_function) \
+             .padded_batch(batch_size, ((None,), ()),
+                           padding_values=(np.int64(char_vocab.PAD_ID),
+                                           np.int64(0)))
+
 
 def oneshot_input_fn(dset):
     iterator = dset.make_one_shot_iterator()
     x, y = iterator.get_next()
     return {'tokens': x}, y
 
+
 if __name__ == "__main__":
-    ds = create_tf_dataset("data/processed/jokes.dat", batch_size=32, num_steps=50, forever=False)
+    # ds = create_tf_dataset("data/processed/jokes.dat", batch_size=32, num_steps=50, forever=False)
+    ds = create_joke_aligned_dataset("data/processed/jokes.tfrecord", 32)
     value = ds.make_one_shot_iterator().get_next()
     init_op = tf.global_variables_initializer()
     with tf.Session() as sess:
