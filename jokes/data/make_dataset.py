@@ -4,8 +4,6 @@ import click
 import logging
 import json
 import random
-import tensorflow as tf
-
 from jokes.data import char_vocab
 
 def joke_iter(filepattern):
@@ -15,7 +13,7 @@ def joke_iter(filepattern):
             data = json.load(fp)
             random.shuffle(data)
             for elem in data:
-                if 'body' not in elem or not elem['body']:
+                if 'body' not in elem:
                     continue
                 if 'title' in elem:
                     yield elem['title'] + '\n' + elem['body']
@@ -40,9 +38,6 @@ def build_vocab(input_filepattern, vocab_filename):
     ensure_parent_dir_exists(vocab_filename)
     char_vocab.create_char_vocab(joke_iter(input_filepattern), vocab_filename)
 
-def _int64_feature(values):
-      return tf.train.Feature(int64_list=tf.train.Int64List(value=values))
-
 @cli.command()
 @click.argument('input_filepattern')
 @click.argument('vocab_filename', type=click.Path(exists=True))
@@ -50,14 +45,13 @@ def _int64_feature(values):
 def build_dataset(input_filepattern, vocab_filename, outfile):
     ensure_parent_dir_exists(outfile)
     transform = char_vocab.Transform(vocab_filename)
-    with tf.python_io.TFRecordWriter(outfile) as writer:
+    with open(outfile, 'w') as outfp:
         for joke in joke_iter(input_filepattern):
             indices = transform.apply(joke)
-            example = tf.train.Example(features=tf.train.Features(feature={
-                'tokens': _int64_feature([transform.GO_id()]+indices + [transform.EOS_id()]),
-                'length': _int64_feature([len(indices) + 2])
-            }))
-            writer.write(example.SerializeToString())
+            print(transform.GO_id(), file=outfp)
+            for i in indices:
+                print(i, file=outfp)
+            print(transform.EOS_id(), file=outfp)
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
