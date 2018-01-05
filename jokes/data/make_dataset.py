@@ -6,6 +6,10 @@ import json
 import random
 from jokes.data import char_vocab
 
+def clean(text):
+    # Get rid of silly carriage return characters.
+    return text.replace('\r', '')
+
 def joke_iter(filepattern):
     filenames = glob.glob(filepattern)
     for fname in filenames:
@@ -16,9 +20,9 @@ def joke_iter(filepattern):
                 if 'body' not in elem:
                     continue
                 if 'title' in elem:
-                    yield elem['title'] + '\n' + elem['body']
+                    yield clean(elem['title'] + '\n' + elem['body'])
                 else:
-                    yield elem['body']
+                    yield clean(elem['body'])
 
 def project_dir():
     return os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)

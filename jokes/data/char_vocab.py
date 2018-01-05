@@ -1,4 +1,5 @@
 import collections
+import sys
 
 PAD = '<pad>'
 PAD_ID = 0
@@ -33,7 +34,7 @@ def unescape_whitespace_char(char):
 def create_char_vocab(text_iter, outfile):
     chars = get_char_counts(text_iter)
     all_chars = (PAD, UNKNOWN, GO, EOS) + next(zip(*chars.most_common()))
-    with open(outfile, 'w') as fp:
+    with open(outfile, 'w', encoding='utf8') as fp:
         for char in all_chars:
             char = escape_whitespace_char(char)
             fp.write(char)
@@ -43,13 +44,20 @@ class Transform(object):
     def __init__(self, vocab_filename):
         self.chars = []
         self.char2id = {}
-        with open(vocab_filename) as fp:
+        with open(vocab_filename, encoding='utf8') as fp:
             for i, line in enumerate(fp):
-                line = line.rstrip('\n')
+                line = unescape_whitespace_char(line.rstrip('\n'))
                 self.chars.append(line)
                 self.char2id[line] = i
 
     def apply(self, text):
+        for ch in text:
+            if ch not in self.char2id:
+                print("UNKNOWN CHARACTER:", ch)
+                print("LEN:", len(ch))
+                print("repr:", repr(ch))
+                sys.exit(1)
+
         return [self.char2id.get(ch, self.UNKNOWN_id()) for ch in text]
 
     def get(self, char):
