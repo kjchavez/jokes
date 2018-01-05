@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import numpy as np
+import itertools
 
 import jokes.models.input as model_input
 import jokes.models.model as model
@@ -15,7 +16,7 @@ def default_hparams(vocab_file):
     HP = tf.contrib.training.HParams(
         batch_size=32,
         unroll_length=100,
-        embedding_dim=50,
+        embedding_dim=200,
         learning_rate=0.01,
         num_layers=2,
         keep_prob=0.9,
@@ -33,9 +34,10 @@ def cli():
 @click.argument("data_file", type=click.Path(exists=True))
 @click.argument("vocab_file", type=click.Path(exists=True))
 @click.option("--model_dir", type=click.Path(), default="models/baseline")
+@click.option("--sanity_check", is_flag=True)
 @click.option("--steps", type=int, default=None)
 @click.option("--hparams", type=str)
-def train(data_file, vocab_file, model_dir, hparams=None, steps=None):
+def train(data_file, vocab_file, model_dir, hparams=None, steps=None, sanity_check=False):
     HP = default_hparams(vocab_file)
     if hparams:
         HP.parse(hparams)
@@ -47,20 +49,37 @@ def train(data_file, vocab_file, model_dir, hparams=None, steps=None):
     print(json.dumps(HP.values(), indent=2))
     print("="*80)
     print("Expected initial loss: %0.3f" % math.log(HP.vocab_size))
+
     ds = model_input.create_tf_dataset(data_file, batch_size=HP.batch_size,
                                        num_steps=HP.unroll_length)
+    if sanity_check:
+        # Take a small slice of the dataset.
+        ds = ds.take(10)
+
+    # Repeat indefinitely.
+    ds.repeat()
 
     print("Saving vocab file to model directory.")
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+
     shutil.copyfile(vocab_file, os.path.join(model_dir, "vocab.txt"))
 
     train_input_fn = lambda: model_input.oneshot_input_fn(ds)
-
     config = tf.estimator.RunConfig(
         save_checkpoints_steps=200
     )
+
     estimator = tf.estimator.Estimator(model.model_fn, model_dir=model_dir, params=HP.values(),
                                        config=config)
-    estimator.train(train_input_fn, steps=steps, )
+
+    # Exit gracefully if we hit the end of the Dataset. This shouldn't happen since we are using
+    # Dataset.repeat(count=None) above. It will just happily train until we hit ctrl-c or some other
+    # hook exits training.
+    try:
+        estimator.train(train_input_fn, steps=steps)
+    except tf.errors.OutOfRangeError:
+        pass
 
 
 def reconstitute(tokens):
