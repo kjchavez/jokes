@@ -1,8 +1,8 @@
 import tensorflow as tf
 
-import sys
 from jokes.data import char_vocab
 
+# TODO(kjchavez): Make these configurable.
 DEFAULT_MAX_SAMPLE_LENGTH = 1000
 DEFAULT_MAX_GRAD_NORM = 5.0
 
@@ -23,6 +23,7 @@ def clipped_train_op(loss, var_list, optimizer, max_grad_norm=DEFAULT_MAX_GRAD_N
 
 
 def assign_lstm_state(ref, value):
+    """Creates an op that will assign the LSTMStateTuples of |value| to those of |ref|."""
     ops = []
     for i, state_tuple in enumerate(value):
         ops.append(tf.assign(ref[i].c, state_tuple.c))
@@ -32,10 +33,6 @@ def assign_lstm_state(ref, value):
 
 
 def model_fn(features, labels, mode, params):
-    """
-    NOTE(kjchavez): |mode| can take on an extra value 'GENERATE' which is not a typical estimator
-    modekey.
-    """
     batch_size = params['batch_size']
     unroll_length = params['unroll_length']
     embedding_dim = params['embedding_dim']
@@ -49,22 +46,6 @@ def model_fn(features, labels, mode, params):
     is_training = mode == tf.contrib.learn.ModeKeys.TRAIN
 
     tokens = features['tokens']
-    targets = labels
-
-    def lstm_cell():
-      return tf.contrib.rnn.BasicLSTMCell(
-          embedding_dim, state_is_tuple=True,
-          reuse=tf.get_variable_scope().reuse)
-
-    attn_cell = lstm_cell
-    if is_training and keep_prob < 1:
-      def attn_cell():
-        return tf.contrib.rnn.DropoutWrapper(
-            lstm_cell(), output_keep_prob=keep_prob)
-
-    cell = tf.contrib.rnn.MultiRNNCell(
-        [attn_cell() for _ in range(num_layers)], state_is_tuple=True)
-
     with tf.device("/cpu:0"):
       embedding = tf.get_variable(
           "embedding", [vocab_size, embedding_dim], dtype=dtype)
@@ -73,9 +54,23 @@ def model_fn(features, labels, mode, params):
     if is_training and keep_prob < 1:
       inputs = tf.nn.dropout(inputs, keep_prob)
 
-    # NOTE: zero_state is a tuple of LSTMStateTuples. But we may be able to do something simpler
-    # with the state that we want to keep as a variable.
-    print("Cell::zero_state", cell.zero_state(batch_size, dtype))
+    def lstm_cell():
+      return tf.contrib.rnn.BasicLSTMCell(
+          embedding_dim, state_is_tuple=True,
+          reuse=tf.get_variable_scope().reuse)
+
+    single_cell = lstm_cell
+    if is_training and keep_prob < 1:
+      def single_cell():
+        return tf.contrib.rnn.DropoutWrapper(
+            lstm_cell(), output_keep_prob=keep_prob)
+
+    cell = tf.contrib.rnn.MultiRNNCell(
+        [single_cell() for _ in range(num_layers)], state_is_tuple=True)
+
+    # TODO(kjchavez): This can be factored out, so that I can simply call something like
+    # init_state = get_init_hidden_state(cell)
+    # tf.cond(cond, assign_lstm_state(init_state, cell.zero_state(batch_size, dtype)), ...)
     with tf.name_scope("HiddenStateInitializer"):
         init_state = []
         reinit_ops = []
@@ -85,6 +80,9 @@ def model_fn(features, labels, mode, params):
             init_state.append(tf.contrib.rnn.LSTMStateTuple(c,h))
             reinit_ops.extend([tf.assign(c, tf.zeros_like(c)), tf.assign(h, tf.zeros_like(h))])
 
+        # TODO(kjchavez): Consider resetting the hidden state when we encounter the <eos> token.
+        # This is not always the right thing to do, but if we're specifically trying to generate
+        # a single "sentence", then it might be helpful.
         maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
                                                             iters_per_epoch), 0),
                                             lambda: tf.group(*reinit_ops),  # Once per epoch
@@ -96,12 +94,20 @@ def model_fn(features, labels, mode, params):
     # functionality as well, such as, tell me the likelihood of this character sequence, or provide
     # a probability distribution over the next character. But we'll come back to that later.
     if mode == tf.estimator.ModeKeys.PREDICT:
+        temperature = features['temperature']
+
+        # This table let's us do the conversion from token indices back to a string directly in the
+        # computation graph. It's not necessarily much faster, BUT it is much more convenient if you
+        # are trying to serve this model on Cloud ML Engine and want to generate samples from the
+        # language model. The values of the table will *automatically* be serialized with the
+        # SavedModel. It's hard to track down where it happens; you have to look at the C++ impl of
+        # the op. No need to mess around with the other saved resources in the exported model.
         mapping_string = tf.constant(params['vocab'])
         table = tf.contrib.lookup.index_to_string_table_from_tensor(
                     mapping_string, default_value="<unk>")
-        # We need to feed an input at each step from the output of the previous
+
+        # This helper feeds back the embedding of a sampled token from the output of the current
         # step.
-        temperature = features['temperature']
         helper = tf.contrib.seq2seq.SampleEmbeddingHelper(
           embedding=embedding,
           start_tokens=tf.tile([char_vocab.GO_ID], [batch_size]),
@@ -152,18 +158,19 @@ def model_fn(features, labels, mode, params):
     train_op = None
     metric_ops = {}
     if mode in (tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL):
-        loss = tf.contrib.seq2seq.sequence_loss(logits, targets,
-                tf.ones_like(targets, dtype=tf.float32),
+        loss = tf.contrib.seq2seq.sequence_loss(logits, labels,
+                tf.ones_like(labels, dtype=tf.float32),
                 average_across_timesteps=True,
                 average_across_batch=True)
         tf.summary.scalar('loss', loss)
 
         # NOTE: All elements are the same length in this model_fn, therefore it's okay to take this
         # mean of means. Otherwise, we'd want to avoid averaging_across_x in the loss function above
-        # and instead use the individual losses in this metric.
+        # and instead use the individual losses in this metric. We'll use this metric to calculate
+        # the per-character perplexity.
         metric_ops["mean_loss"] = tf.metrics.mean(loss)
 
-        # NOTE(kjchavez): It's okay if we add this train op to the EstimatorSpec in EVAL mode. It
+        # It's okay if we add this train op to the EstimatorSpec in EVAL mode. It
         # will be ignored. Notice that we also pass the 'mode' itself.
         tvars = tf.trainable_variables()
         opt_map = {
@@ -177,9 +184,15 @@ def model_fn(features, labels, mode, params):
         else:
             optimizer = opt_map[params['optimizer']](learning_rate)
 
-        # NOTE: We may want to ensure that if we with the <eos> token, that the state is cleared to
-        # zeros.
         train_op = clipped_train_op(loss, tvars, optimizer)
+
+        # IMPORTANT NOTE: Since the value of |init_state| *will* affect the gradient computation, we
+        # must make sure that we evaluate the train_op *before* updating the stored hidden state for
+        # the next batch. We bundle the update with the train_op to avoid fetching it from the model
+        # and re-feeding it through a feed_dict or other mechanism.
+        # There is a noted disadvantage! That non-trainable variables are a problem for distributed
+        # training. At least the out-of-the-box version. You have distribute a little more
+        # thoughtfully.
         with tf.control_dependencies([train_op]):
             assign_op = assign_lstm_state(init_state, final_state)
 
