@@ -24,6 +24,19 @@ def joke_iter(filepattern):
                 else:
                     yield clean(elem['body'])
 
+def split(examples, shuffled=False):
+    N = len(examples)
+    test_N = min(int(0.2*N), 5000)
+    N = N - test_N
+    dev_N = min(int(0.2*N), 5000)
+    train_N = N - dev_N
+    if not shuffled:
+        random.shuffle(examples)
+    train = examples[0:train_N]
+    dev = examples[train_N:train_N+dev_N]
+    test = examples[train_N+dev_N:]
+    return train, dev, test
+
 def project_dir():
     return os.path.join(os.path.dirname(__file__), os.pardir, os.pardir)
 
@@ -42,6 +55,15 @@ def build_vocab(input_filepattern, vocab_filename):
     ensure_parent_dir_exists(vocab_filename)
     char_vocab.create_char_vocab(joke_iter(input_filepattern), vocab_filename)
 
+def write_examples(examples, transform, filename):
+    with open(filename, 'w') as outfp:
+        for joke in examples:
+            indices = transform.apply(joke)
+            print(transform.GO_id(), file=outfp)
+            for i in indices:
+                print(i, file=outfp)
+            print(transform.EOS_id(), file=outfp)
+
 @cli.command()
 @click.argument('input_filepattern')
 @click.argument('vocab_filename', type=click.Path(exists=True))
@@ -49,13 +71,13 @@ def build_vocab(input_filepattern, vocab_filename):
 def build_dataset(input_filepattern, vocab_filename, outfile):
     ensure_parent_dir_exists(outfile)
     transform = char_vocab.Transform(vocab_filename)
-    with open(outfile, 'w') as outfp:
-        for joke in joke_iter(input_filepattern):
-            indices = transform.apply(joke)
-            print(transform.GO_id(), file=outfp)
-            for i in indices:
-                print(i, file=outfp)
-            print(transform.EOS_id(), file=outfp)
+    jokes = list(joke_iter(input_filepattern))
+    train, dev, test = split(jokes)
+    sanity = train[0:10]
+    write_examples(train, transform, outfile+".train")
+    write_examples(dev, transform, outfile+".dev")
+    write_examples(test, transform, outfile+".test")
+    write_examples(sanity, transform, outfile+".sanity")
 
 if __name__ == '__main__':
     log_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
