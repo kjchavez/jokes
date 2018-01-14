@@ -31,6 +31,15 @@ def assign_lstm_state(ref, value):
 
     return tf.group(*ops)
 
+def get_init_hidden_state(cell, batch_size, dtype=tf.float32):
+    init_state = []
+    for i, state_tuple in enumerate(cell.zero_state(batch_size, dtype)):
+        c = tf.get_variable("init_c_%d" % i, initializer=state_tuple.c, trainable=False)
+        h = tf.get_variable("init_h_%d" % i, initializer=state_tuple.h, trainable=False)
+        init_state.append(tf.contrib.rnn.LSTMStateTuple(c,h))
+
+    return tuple(init_state)
+
 
 def model_fn(features, labels, mode, params):
     batch_size = params['batch_size']
@@ -68,26 +77,17 @@ def model_fn(features, labels, mode, params):
     cell = tf.contrib.rnn.MultiRNNCell(
         [single_cell() for _ in range(num_layers)], state_is_tuple=True)
 
-    # TODO(kjchavez): This can be factored out, so that I can simply call something like
-    # init_state = get_init_hidden_state(cell)
-    # tf.cond(cond, assign_lstm_state(init_state, cell.zero_state(batch_size, dtype)), ...)
     with tf.name_scope("HiddenStateInitializer"):
-        init_state = []
-        reinit_ops = []
-        for i, state_tuple in enumerate(cell.zero_state(batch_size, dtype)):
-            c = tf.get_variable("init_c_%d" % i, initializer=state_tuple.c, trainable=False)
-            h = tf.get_variable("init_h_%d" % i, initializer=state_tuple.h, trainable=False)
-            init_state.append(tf.contrib.rnn.LSTMStateTuple(c,h))
-            reinit_ops.extend([tf.assign(c, tf.zeros_like(c)), tf.assign(h, tf.zeros_like(h))])
+        init_state = get_init_hidden_state(cell, batch_size, dtype=dtype)
+        zero_states = cell.zero_state(batch_size, dtype)
 
         # TODO(kjchavez): Consider resetting the hidden state when we encounter the <eos> token.
         # This is not always the right thing to do, but if we're specifically trying to generate
         # a single "sentence", then it might be helpful.
         maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
                                                             iters_per_epoch), 0),
-                                            lambda: tf.group(*reinit_ops),  # Once per epoch
+                                            lambda: assign_lstm_state(init_state, zero_states),
                                             tf.no_op)
-        init_state = tuple(init_state)
 
     table = None
     # Predict will currently draw a sample from the generative model. We likely need other
