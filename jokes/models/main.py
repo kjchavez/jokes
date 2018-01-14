@@ -15,14 +15,13 @@ from jokes.data import char_vocab
 def default_hparams(vocab_file):
     transform = char_vocab.Transform(vocab_file)
     HP = tf.contrib.training.HParams(
-        batch_size=32,
-        unroll_length=100,
-        embedding_dim=200,
-        learning_rate=0.01,
+        batch_size=64,
+        unroll_length=20,
+        embedding_dim=256,
+        learning_rate=0.1,
         num_layers=2,
         keep_prob=0.9,
-        l2_reg=0.001,
-        optimizer='sgd',
+        optimizer='momentum',
         vocab_size=len(transform.chars),
         vocab=transform.chars
     )
@@ -165,6 +164,30 @@ def generate(model_dir, temperature):
     tokens = outputs['tokens']
     print("Sample:")
     print(reconstitute(tokens))
+
+@cli.command()
+@click.argument("data_file", type=click.Path(exists=True))
+@click.option("--model_dir", type=click.Path(), default="models/baseline")
+def eval(data_file, model_dir):
+    vocab_file = os.path.join(model_dir, "vocab.txt")
+    transform = char_vocab.Transform(vocab_file)
+
+    hparam_file = os.path.join(model_dir, "hparams.json")
+    with open(hparam_file) as fp:
+        saved_params = json.load(fp)
+    HP = tf.contrib.training.HParams(**saved_params)
+    # Set batch size to 1 so we don't start in the middle sometimes?
+    estimator = tf.estimator.Estimator(model.model_fn, model_dir=model_dir, params=HP.values())
+
+    with tf.name_scope("EvalDataset"):
+        ds = model_input.create_tf_dataset(data_file, batch_size=HP.batch_size,
+                                           num_steps=HP.unroll_length)
+        eval_input_fn = lambda: model_input.oneshot_input_fn(ds)
+
+    metrics = estimator.evaluate(input_fn=eval_input_fn)
+    perplexity = math.exp(metrics['mean_loss'])
+    print(metrics)
+    print("Per-character perplexity: %0.2f" % perplexity)
 
 if __name__ == "__main__":
     cli()

@@ -43,7 +43,6 @@ def model_fn(features, labels, mode, params):
     keep_prob = params['keep_prob']
     num_layers = params['num_layers']
     learning_rate = params['learning_rate']
-    l2_reg = params['l2_reg']
     # Used to determine when to reset hidden state!
     iters_per_epoch = params['iters_per_epoch']
     dtype = tf.float32
@@ -116,8 +115,7 @@ def model_fn(features, labels, mode, params):
                 sequence_length=tf.tile([unroll_length], [batch_size]))
 
     output_layer = tf.layers.Dense(vocab_size, name="fully_connected",
-                                   activation=None,
-                                   kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg))
+                                   activation=None)
 
     # NOTE(kjchavez): The |output_layer| is applied prior to storing the result OR SAMPLING. This
     # last part is important. If you forget, and the LSTM hidden dim is smaller than the vocab, you
@@ -152,13 +150,21 @@ def model_fn(features, labels, mode, params):
 
     loss = None
     train_op = None
-    if mode == tf.estimator.ModeKeys.TRAIN:
+    metric_ops = {}
+    if mode in (tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL):
         loss = tf.contrib.seq2seq.sequence_loss(logits, targets,
                 tf.ones_like(targets, dtype=tf.float32),
                 average_across_timesteps=True,
                 average_across_batch=True)
         tf.summary.scalar('loss', loss)
 
+        # NOTE: All elements are the same length in this model_fn, therefore it's okay to take this
+        # mean of means. Otherwise, we'd want to avoid averaging_across_x in the loss function above
+        # and instead use the individual losses in this metric.
+        metric_ops["mean_loss"] = tf.metrics.mean(loss)
+
+        # NOTE(kjchavez): It's okay if we add this train op to the EstimatorSpec in EVAL mode. It
+        # will be ignored. Notice that we also pass the 'mode' itself.
         tvars = tf.trainable_variables()
         opt_map = {
             'sgd': tf.train.GradientDescentOptimizer,
@@ -180,6 +186,7 @@ def model_fn(features, labels, mode, params):
         train_op = tf.group(maybe_reinit_hidden_state, train_op, assign_op)
 
     return tf.estimator.EstimatorSpec(
+        eval_metric_ops=metric_ops,
         mode=mode,
         predictions=predictions,
         loss=loss,
