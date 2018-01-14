@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+import sys
 from jokes.data import char_vocab
 
 DEFAULT_MAX_SAMPLE_LENGTH = 1000
@@ -21,6 +22,15 @@ def clipped_train_op(loss, var_list, optimizer, max_grad_norm=DEFAULT_MAX_GRAD_N
     return train_op
 
 
+def assign_lstm_state(ref, value):
+    ops = []
+    for i, state_tuple in enumerate(value):
+        ops.append(tf.assign(ref[i].c, state_tuple.c))
+        ops.append(tf.assign(ref[i].h, state_tuple.h))
+
+    return tf.group(*ops)
+
+
 def model_fn(features, labels, mode, params):
     """
     NOTE(kjchavez): |mode| can take on an extra value 'GENERATE' which is not a typical estimator
@@ -34,6 +44,8 @@ def model_fn(features, labels, mode, params):
     num_layers = params['num_layers']
     learning_rate = params['learning_rate']
     l2_reg = params['l2_reg']
+    # Used to determine when to reset hidden state!
+    iters_per_epoch = params['iters_per_epoch']
     dtype = tf.float32
     is_training = mode == tf.contrib.learn.ModeKeys.TRAIN
 
@@ -42,7 +54,7 @@ def model_fn(features, labels, mode, params):
 
     def lstm_cell():
       return tf.contrib.rnn.BasicLSTMCell(
-          embedding_dim, forget_bias=0.0, state_is_tuple=True,
+          embedding_dim, state_is_tuple=True,
           reuse=tf.get_variable_scope().reuse)
 
     attn_cell = lstm_cell
@@ -61,6 +73,24 @@ def model_fn(features, labels, mode, params):
 
     if is_training and keep_prob < 1:
       inputs = tf.nn.dropout(inputs, keep_prob)
+
+    # NOTE: zero_state is a tuple of LSTMStateTuples. But we may be able to do something simpler
+    # with the state that we want to keep as a variable.
+    print("Cell::zero_state", cell.zero_state(batch_size, dtype))
+    with tf.name_scope("HiddenStateInitializer"):
+        init_state = []
+        reinit_ops = []
+        for i, state_tuple in enumerate(cell.zero_state(batch_size, dtype)):
+            c = tf.get_variable("init_c_%d" % i, initializer=state_tuple.c, trainable=False)
+            h = tf.get_variable("init_h_%d" % i, initializer=state_tuple.h, trainable=False)
+            init_state.append(tf.contrib.rnn.LSTMStateTuple(c,h))
+            reinit_ops.extend([tf.assign(c, tf.zeros_like(c)), tf.assign(h, tf.zeros_like(h))])
+
+        maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
+                                                            iters_per_epoch), 0),
+                                            lambda: tf.group(*reinit_ops),  # Once per epoch
+                                            tf.no_op)
+        init_state = tuple(init_state)
 
     table = None
     # Predict will currently draw a sample from the generative model. We likely need other
@@ -85,30 +115,41 @@ def model_fn(features, labels, mode, params):
                 inputs=inputs,
                 sequence_length=tf.tile([unroll_length], [batch_size]))
 
-    output_layer = tf.layers.Dense(vocab_size,
+    output_layer = tf.layers.Dense(vocab_size, name="fully_connected",
+                                   activation=None,
                                    kernel_regularizer=tf.contrib.layers.l2_regularizer(l2_reg))
-    decoder = tf.contrib.seq2seq.BasicDecoder(
-        cell=cell,
-        helper=helper,
-        initial_state=cell.zero_state(batch_size, dtype),
-        output_layer=output_layer)
 
-    outputs, state, seq_lens = tf.contrib.seq2seq.dynamic_decode(
-       decoder=decoder,
-       output_time_major=False,
-       impute_finished=True,
-       maximum_iterations=params.get('max_sample_length',
-           DEFAULT_MAX_SAMPLE_LENGTH))
+    # NOTE(kjchavez): The |output_layer| is applied prior to storing the result OR SAMPLING. This
+    # last part is important. If you forget, and the LSTM hidden dim is smaller than the vocab, you
+    # will be out of luck.
+    with tf.control_dependencies([maybe_reinit_hidden_state]):
+        decoder = tf.contrib.seq2seq.BasicDecoder(
+            cell=cell,
+            helper=helper,
+            initial_state=init_state,
+            output_layer=output_layer)
+
+        outputs, final_state, seq_lens = tf.contrib.seq2seq.dynamic_decode(
+           decoder=decoder,
+           output_time_major=False,
+           impute_finished=True,
+           maximum_iterations=params.get('max_sample_length',
+               DEFAULT_MAX_SAMPLE_LENGTH))
+
+    tf.summary.histogram("lstm_activations", outputs.rnn_output)
 
     predictions = {}
+    with tf.name_scope("Prediction"):
+        output_token_ids = outputs.sample_id
+        tf.summary.histogram("token_id", output_token_ids)
+        predictions['token_ids'] = output_token_ids
+        if table is not None:
+            predictions['tokens'] = table.lookup(tf.to_int64(outputs.sample_id))
 
-    output_token_ids = outputs.sample_id
-    predictions['token_ids'] = output_token_ids
-    if table is not None:
-        predictions['tokens'] = table.lookup(tf.to_int64(outputs.sample_id))
+        logits = outputs.rnn_output
+        tf.summary.histogram("logits", logits)
+        token_probability = tf.nn.softmax(logits)
 
-    logits = outputs.rnn_output
-    token_probability = tf.nn.softmax(logits)
     loss = None
     train_op = None
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -119,8 +160,24 @@ def model_fn(features, labels, mode, params):
         tf.summary.scalar('loss', loss)
 
         tvars = tf.trainable_variables()
-        optimizer = tf.train.RMSPropOptimizer(learning_rate)
+        opt_map = {
+            'sgd': tf.train.GradientDescentOptimizer,
+            'adagrad': tf.train.AdagradOptimizer,
+            'adam': tf.train.AdamOptimizer,
+            'rmsprop': tf.train.RMSPropOptimizer
+        }
+        if params['optimizer'] == 'momentum':
+            optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9, use_nesterov=True)
+        else:
+            optimizer = opt_map[params['optimizer']](learning_rate)
+
+        # NOTE: We may want to ensure that if we with the <eos> token, that the state is cleared to
+        # zeros.
         train_op = clipped_train_op(loss, tvars, optimizer)
+        with tf.control_dependencies([train_op]):
+            assign_op = assign_lstm_state(init_state, final_state)
+
+        train_op = tf.group(maybe_reinit_hidden_state, train_op, assign_op)
 
     return tf.estimator.EstimatorSpec(
         mode=mode,
