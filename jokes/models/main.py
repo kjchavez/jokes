@@ -22,6 +22,7 @@ def default_hparams(vocab_file):
         num_layers=2,
         keep_prob=0.9,
         optimizer='momentum',
+        reset_after_eos=True,
         vocab_size=len(transform.chars),
         vocab=transform.chars
     )
@@ -140,7 +141,8 @@ def reconstitute(tokens):
 @cli.command()
 @click.option("--model_dir", type=click.Path(), default="models/baseline")
 @click.option("--temperature", type=float, default=1.0)
-def generate(model_dir, temperature):
+@click.option("--verbose", is_flag=True)
+def generate(model_dir, temperature, verbose=False):
     vocab_file = os.path.join(model_dir, "vocab.txt")
     transform = char_vocab.Transform(vocab_file)
 
@@ -164,6 +166,9 @@ def generate(model_dir, temperature):
     tokens = outputs['tokens']
     print("Sample:")
     print(reconstitute(tokens))
+    if verbose:
+        print("Initial hidden state")
+        print(outputs)
 
 @cli.command()
 @click.argument("data_file", type=click.Path(exists=True))

@@ -86,10 +86,13 @@ def model_fn(features, labels, mode, params):
         # a single "sentence", then it might be helpful.
         # NOTE: In the "eval" step, the global_step depends on where you paused training, so we
         # might not end up resetting the hidden state at the right time.
-        maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
-                                                            iters_per_epoch), 0),
-                                            lambda: assign_lstm_state(init_state, zero_states),
-                                            tf.no_op)
+        if mode == tf.estimator.ModeKeys.PREDICT:
+            maybe_reinit_hidden_state = assign_lstm_state(init_state, zero_states)
+        else:
+            maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
+                                                                iters_per_epoch), 0),
+                                                lambda: assign_lstm_state(init_state, zero_states),
+                                                tf.no_op)
 
     table = None
     # Predict will currently draw a sample from the generative model. We likely need other
@@ -144,6 +147,24 @@ def model_fn(features, labels, mode, params):
 
     tf.summary.histogram("lstm_activations", outputs.rnn_output)
 
+    # We can optionally reset the hidden states of the LSTM after we encounter an EOS token. If we
+    # are not interested in modelling dependencies between successive "sentences", this can help
+    # learn a more consistent representation of the "GO" token. For the joke modelling task, this
+    # makes sense if we are only interested in a single joke at a time, and not, say, an entire
+    # routine.
+    if params.get('reset_after_eos', False):
+        zero_states = cell.zero_state(batch_size, dtype)
+        actual_final_state = []
+        for i  in range(len(final_state)):
+            cond = tf.logical_and(tf.not_equal(outputs.sample_id[:, -1], char_vocab.EOS_ID),
+                                  tf.not_equal(outputs.sample_id[:, -1], char_vocab.PAD_ID))
+            cond = tf.reshape(cond, [-1]) # Collapse batch to 1-D
+            c = tf.where(cond, final_state[i].c, zero_states[i].c)
+            h = tf.where(cond, final_state[i].h, zero_states[i].h)
+            actual_final_state.append(tf.contrib.rnn.LSTMStateTuple(c, h))
+
+        final_state = tuple(actual_final_state)
+
     predictions = {}
     with tf.name_scope("Prediction"):
         output_token_ids = outputs.sample_id
@@ -151,6 +172,14 @@ def model_fn(features, labels, mode, params):
         predictions['token_ids'] = output_token_ids
         if table is not None:
             predictions['tokens'] = table.lookup(tf.to_int64(outputs.sample_id))
+
+        for i, state_tuple in enumerate(init_state):
+            predictions['init_state_%d_c' % i] = state_tuple.c.value()
+            predictions['init_state_%d_h' % i] = state_tuple.h.value()
+
+        for i, state_tuple in enumerate(final_state):
+            predictions['final_state_%d_c' % i] = state_tuple.c
+            predictions['final_state_%d_h' % i] = state_tuple.h
 
         logits = outputs.rnn_output
         tf.summary.histogram("logits", logits)
