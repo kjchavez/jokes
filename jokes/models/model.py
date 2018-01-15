@@ -84,6 +84,8 @@ def model_fn(features, labels, mode, params):
         # TODO(kjchavez): Consider resetting the hidden state when we encounter the <eos> token.
         # This is not always the right thing to do, but if we're specifically trying to generate
         # a single "sentence", then it might be helpful.
+        # NOTE: In the "eval" step, the global_step depends on where you paused training, so we
+        # might not end up resetting the hidden state at the right time.
         maybe_reinit_hidden_state = tf.cond(tf.equal(tf.mod(tf.train.get_or_create_global_step(),
                                                             iters_per_epoch), 0),
                                             lambda: assign_lstm_state(init_state, zero_states),
