@@ -17,10 +17,11 @@ def default_hparams(vocab_file):
     HP = tf.contrib.training.HParams(
         batch_size=64,
         unroll_length=20,
-        embedding_dim=50,
+        embedding_dim=100,
         lstm_dim=512,
         learning_rate=0.1,
         num_layers=2,
+        use_char_embeddings=True,
         keep_prob=0.9,
         optimizer='momentum',
         vocab_size=len(transform.chars),

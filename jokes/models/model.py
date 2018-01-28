@@ -56,13 +56,17 @@ def model_fn(features, labels, mode, params):
     is_training = mode == tf.contrib.learn.ModeKeys.TRAIN
 
     tokens = features['tokens']
-    with tf.device("/cpu:0"):
-      embedding = tf.get_variable(
-          "embedding", [vocab_size, embedding_dim], dtype=dtype)
-      inputs = tf.nn.embedding_lookup(embedding, tokens)
+    if params['use_char_embeddings']:
+        with tf.name_scope("Embedding"):
+            with tf.device("/cpu:0"):
+              embedding = tf.get_variable(
+                  "embedding", [vocab_size, embedding_dim], dtype=dtype)
+              inputs = tf.nn.embedding_lookup(embedding, tokens)
 
-    if is_training and keep_prob < 1:
-      inputs = tf.nn.dropout(inputs, keep_prob)
+            if is_training and keep_prob < 1:
+              inputs = tf.nn.dropout(inputs, keep_prob)
+    else:  # Create one-hot encoding
+        inputs = tf.one_hot(tokens, vocab_size)
 
     def lstm_cell():
       return tf.contrib.rnn.BasicLSTMCell(
