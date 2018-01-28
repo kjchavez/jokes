@@ -45,6 +45,7 @@ def model_fn(features, labels, mode, params):
     batch_size = params['batch_size']
     unroll_length = params['unroll_length']
     embedding_dim = params['embedding_dim']
+    lstm_dim = params['lstm_dim']
     vocab_size = params['vocab_size']
     keep_prob = params['keep_prob']
     num_layers = params['num_layers']
@@ -65,7 +66,7 @@ def model_fn(features, labels, mode, params):
 
     def lstm_cell():
       return tf.contrib.rnn.BasicLSTMCell(
-          embedding_dim, state_is_tuple=True,
+          lstm_dim, state_is_tuple=True,
           reuse=tf.get_variable_scope().reuse)
 
     single_cell = lstm_cell
@@ -146,25 +147,6 @@ def model_fn(features, labels, mode, params):
                DEFAULT_MAX_SAMPLE_LENGTH))
 
     tf.summary.histogram("lstm_activations", outputs.rnn_output)
-
-    # We can optionally reset the hidden states of the LSTM after we encounter an EOS token. If we
-    # are not interested in modelling dependencies between successive "sentences", this can help
-    # learn a more consistent representation of the "GO" token. For the joke modelling task, this
-    # makes sense if we are only interested in a single joke at a time, and not, say, an entire
-    # routine.
-    if params.get('reset_after_eos', False):
-        zero_states = cell.zero_state(batch_size, dtype)
-        actual_final_state = []
-        for i  in range(len(final_state)):
-            cond = tf.logical_and(tf.not_equal(outputs.sample_id[:, -1], char_vocab.EOS_ID),
-                                  tf.not_equal(outputs.sample_id[:, -1], char_vocab.PAD_ID))
-            cond = tf.reshape(cond, [-1]) # Collapse batch to 1-D
-            c = tf.where(cond, final_state[i].c, zero_states[i].c)
-            h = tf.where(cond, final_state[i].h, zero_states[i].h)
-            actual_final_state.append(tf.contrib.rnn.LSTMStateTuple(c, h))
-
-        final_state = tuple(actual_final_state)
-
     predictions = {}
     with tf.name_scope("Prediction"):
         output_token_ids = outputs.sample_id
@@ -183,7 +165,9 @@ def model_fn(features, labels, mode, params):
 
         logits = outputs.rnn_output
         tf.summary.histogram("logits", logits)
+        predictions['logits'] = logits
         token_probability = tf.nn.softmax(logits)
+        predictions['token_probs'] = token_probability
 
     loss = None
     train_op = None

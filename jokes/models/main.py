@@ -17,12 +17,12 @@ def default_hparams(vocab_file):
     HP = tf.contrib.training.HParams(
         batch_size=64,
         unroll_length=20,
-        embedding_dim=256,
+        embedding_dim=50,
+        lstm_dim=512,
         learning_rate=0.1,
         num_layers=2,
         keep_prob=0.9,
         optimizer='momentum',
-        reset_after_eos=True,
         vocab_size=len(transform.chars),
         vocab=transform.chars
     )
@@ -143,6 +143,10 @@ def reconstitute(tokens):
 @click.option("--temperature", type=float, default=1.0)
 @click.option("--verbose", is_flag=True)
 def generate(model_dir, temperature, verbose=False):
+    _internal_generate(model_dir, temperature, verbose=verbose)
+
+
+def _internal_generate(model_dir, temperature, verbose=False):
     vocab_file = os.path.join(model_dir, "vocab.txt")
     transform = char_vocab.Transform(vocab_file)
 
@@ -169,6 +173,8 @@ def generate(model_dir, temperature, verbose=False):
     if verbose:
         print("Initial hidden state")
         print(outputs)
+
+    return outputs
 
 @cli.command()
 @click.argument("data_file", type=click.Path(exists=True))

@@ -27,6 +27,9 @@ train: jokes/models/main.py $(dataset_train) $(vocab_filename)
 generate: jokes/models/main.py $(model_dir)/model.ckpt-*
 	python -m jokes.models.main generate --model_dir=$(model_dir)
 
+evaluate: jokes/models/main.py $(model_dir)/model.ckpt-*
+	python -m jokes.models.main eval $(dataset_dev) --model_dir=$(model_dir)
+
 clean_models:
 	rm -rf models/*
 
