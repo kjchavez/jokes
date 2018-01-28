@@ -31,9 +31,13 @@ inv_mapping = {v: k for k, v in mapping.items()}
 def unescape_whitespace_char(char):
     return inv_mapping.get(char, char)
 
-def create_char_vocab(text_iter, outfile):
+def create_char_vocab(text_iter, outfile, min_count=100):
     chars = get_char_counts(text_iter)
-    all_chars = (PAD, UNKNOWN, GO, EOS) + next(zip(*chars.most_common()))
+    all_chars = [PAD, UNKNOWN, GO, EOS]
+    for char, count in chars.most_common():
+        if count > min_count:
+            all_chars.append(char)
+
     with open(outfile, 'w', encoding='utf8') as fp:
         for char in all_chars:
             char = escape_whitespace_char(char)
@@ -54,9 +58,6 @@ class Transform(object):
         for ch in text:
             if ch not in self.char2id:
                 print("UNKNOWN CHARACTER:", ch)
-                print("LEN:", len(ch))
-                print("repr:", repr(ch))
-                sys.exit(1)
 
         return [self.char2id.get(ch, self.UNKNOWN_id()) for ch in text]
 
